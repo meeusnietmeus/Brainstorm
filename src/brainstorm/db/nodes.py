@@ -54,6 +54,14 @@ class NodeRepository:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def move_many(self, moves: list[tuple[str, float, float]], updated_at: str) -> None:
+        """Set x/y for several nodes in a single transaction."""
+        self._conn.executemany(
+            "UPDATE nodes SET x = ?, y = ?, updated_at = ? WHERE id = ?",
+            [(x, y, updated_at, node_id) for node_id, x, y in moves],
+        )
+        self._conn.commit()
+
     def delete(self, node_id: str) -> bool:
         cur = self._conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
         self._conn.commit()

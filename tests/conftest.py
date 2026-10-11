@@ -6,10 +6,11 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage
 
 from brainstorm.db.assets import AssetRepository
 from brainstorm.db.connection import connect
+from brainstorm.db.edges import EdgeRepository
 from brainstorm.db.migrations import migrate
 from brainstorm.db.nodes import NodeRepository
 from brainstorm.db.spaces import SpaceRepository
-from brainstorm.services import AssetStore, NodeService
+from brainstorm.services import AssetStore, EdgeService, NodeService
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -51,6 +52,11 @@ def global_space(conn):
 @pytest.fixture
 def node_service(conn):
     return NodeService(NodeRepository(conn))
+
+
+@pytest.fixture
+def edge_service(conn):
+    return EdgeService(EdgeRepository(conn), NodeRepository(conn))
 
 
 @pytest.fixture

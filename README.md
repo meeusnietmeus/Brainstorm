@@ -72,3 +72,19 @@ ruff check .
   browser works the same way; remote images appear as a placeholder and are downloaded on the
   thread pool, with their source URL stored in `assets.source_url`.
 - `]` and `[` move the selected node up and down in the stacking order.
+
+### Phase 4: Arrows and frames
+
+- Arrows (`edges` table, migration 004; self-loops and duplicate directions are rejected by the
+  database and `EdgeService`). Select a note, drag from one of its four side dots onto another
+  node to connect, or release on empty canvas to create a new connected note. Each arrow has a
+  chip at its midpoint: click selects (Delete removes it), double-click edits the label, and a
+  small toolbar sets dashed, arrow (end/both/line) and label.
+- Arrows follow their nodes live during drags and resizes: they resolve the node delegates
+  through a registry in `Canvas.qml` instead of reading the model. The curve comes from the pure,
+  tested `geometry.edge_geometry`.
+- Frames (`Add frame`): translucent titled rectangles in a z-band below other nodes. Only the
+  title bar takes mouse input, so the inside stays usable. Dragging a frame carries every node
+  that was fully inside it (computed fresh at drag start via `geometry.nodes_inside`) and commits
+  everything with one `NodeService.move_many`. Title and tint are editable.
+- Deleting a node removes its arrows (database cascade; `EdgeModel` follows the node signal).

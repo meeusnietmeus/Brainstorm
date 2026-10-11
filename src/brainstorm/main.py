@@ -10,10 +10,17 @@ from brainstorm.app_state import AppState
 from brainstorm.controllers import CanvasController
 from brainstorm.db.assets import AssetRepository
 from brainstorm.db.connection import connect
+from brainstorm.db.edges import EdgeRepository
 from brainstorm.db.migrations import migrate
 from brainstorm.db.nodes import NodeRepository
 from brainstorm.db.spaces import SpaceRepository
-from brainstorm.services import AssetStore, ClipboardService, NodeService, SpaceService
+from brainstorm.services import (
+    AssetStore,
+    ClipboardService,
+    EdgeService,
+    NodeService,
+    SpaceService,
+)
 
 QML_URI = "Brainstorm"
 
@@ -43,12 +50,14 @@ def main() -> int:
     global_space = SpaceRepository(conn).ensure_global()
 
     # Services are the only write path. Kept referenced here so they outlive the engine.
-    node_service = NodeService(NodeRepository(conn))
+    node_repo = NodeRepository(conn)
+    node_service = NodeService(node_repo)
+    edge_service = EdgeService(EdgeRepository(conn), node_repo)
     space_service = SpaceService(SpaceRepository(conn))
     state = AppState(global_space.id)
     assets = AssetStore(AssetRepository(conn), paths.assets_dir())
     clipboard = ClipboardService(node_service, assets)
-    canvas = CanvasController(node_service, space_service, state, clipboard, assets)
+    canvas = CanvasController(node_service, edge_service, space_service, state, clipboard, assets)
 
     engine = create_engine(state, canvas)
     if not engine.rootObjects():

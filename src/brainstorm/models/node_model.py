@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 
 from PySide6.QtCore import (
@@ -93,7 +94,8 @@ class NodeModel(QAbstractListModel):
             return
         row = len(self._nodes)
         self.beginInsertRows(QModelIndex(), row, row)
-        self._nodes.append(node)
+        # A copy: _on_moved mutates rows in place and must not change the caller's object.
+        self._nodes.append(replace(node))
         self._rows[node.id] = row
         self.endInsertRows()
         self.countChanged.emit()
