@@ -55,3 +55,20 @@ ruff check .
 - Migration 002 stores each space's pan and zoom (`spaces.view_state`), saved 500 ms after the
   last change and restored when the space opens.
 - Dot grid is one tiled image positioned modulo the tile size, so panning costs nothing.
+
+### Phase 3: Text, images, paste and drop
+
+- Text notes: double-click to edit (new notes open in edit mode); Escape or clicking away commits.
+  When not editing, the body is rendered as Markdown. The title is the first line of the body. A
+  floating toolbar above the selected note switches plain/card, font size S/M/L and auto height.
+  A note that was empty and stays empty is removed.
+- Four corner resize handles with a constant on-screen size. Images keep their aspect ratio
+  (hold Shift to break it); notes grow with their text unless you drag vertically.
+- `AssetStore`: content-addressed files in `assets/<2 hex>/<sha256>.<ext>` (migration 003).
+  Identical bytes are stored once, originals keep full size; only the display size is reduced.
+  Images decode at roughly their on-screen size, rounded up to a power of two.
+- Ctrl+V pastes image data (image node), a URL (link node) or text (note) under the cursor, or at
+  the viewport center when the cursor is elsewhere. Dropping image files or images dragged from a
+  browser works the same way; remote images appear as a placeholder and are downloaded on the
+  thread pool, with their source URL stored in `assets.source_url`.
+- `]` and `[` move the selected node up and down in the stacking order.

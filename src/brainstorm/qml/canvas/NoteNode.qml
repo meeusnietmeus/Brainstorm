@@ -1,0 +1,85 @@
+import QtQuick
+import "../components"
+
+// Text note. Not editing: the body is rendered as Markdown. Editing: raw text in a TextEdit.
+Item {
+    id: root
+    objectName: "noteNode"
+
+    property string body
+    property string noteStyle: "plain" // plain: loose text, card: filled box
+    property string fontSizeKey: "M"
+    property bool selected: false
+    property bool editing: false
+    property real zoom: 1
+
+    // Height the note needs for its text at the current width (used unless the user fixed it).
+    readonly property real naturalHeight: Math.max(
+        40, (editing ? edit.contentHeight : view.contentHeight) + 2 * padding)
+
+    readonly property bool rendersMarkdown: !editing && view.textFormat === Text.MarkdownText
+    readonly property real padding: 12
+    readonly property real fontPixels: ({ "S": 13, "M": 17, "L": 24 })[fontSizeKey] ?? 17
+
+    signal editFinished(string text, real height)
+
+    function finishEditing() {
+        if (editing)
+            editFinished(edit.text, naturalHeight)
+    }
+
+    function _startEditing() {
+        edit.text = body
+        edit.forceActiveFocus()
+        edit.cursorPosition = edit.length
+    }
+
+    onEditingChanged: {
+        if (editing)
+            _startEditing()
+        else
+            edit.focus = false // otherwise the hidden editor keeps swallowing key presses
+    }
+    Component.onCompleted: if (editing) _startEditing()
+
+    Rectangle {
+        anchors.fill: parent
+        radius: 8
+        color: root.noteStyle === "card" ? Theme.surface : "transparent"
+        border.width: (root.selected || root.editing ? 2 : (root.noteStyle === "card" ? 1 : 0)) / root.zoom
+        border.color: root.selected || root.editing ? Theme.accent : Theme.border
+    }
+
+    Text {
+        id: view
+        objectName: "noteView"
+        visible: !root.editing
+        x: root.padding
+        y: root.padding
+        width: root.width - 2 * root.padding
+        text: root.body.length > 0 ? root.body : "Double-click to type"
+        textFormat: root.body.length > 0 ? Text.MarkdownText : Text.PlainText
+        wrapMode: Text.Wrap
+        color: root.body.length > 0 ? Theme.text : Theme.textDisabled
+        font.family: Theme.fontFamily
+        font.pixelSize: root.fontPixels
+    }
+
+    TextEdit {
+        id: edit
+        objectName: "noteEdit"
+        visible: root.editing
+        x: root.padding
+        y: root.padding
+        width: root.width - 2 * root.padding
+        wrapMode: TextEdit.Wrap
+        selectByMouse: true
+        color: Theme.text
+        selectionColor: Theme.accent
+        font.family: Theme.fontFamily
+        font.pixelSize: root.fontPixels
+
+        Keys.onEscapePressed: root.finishEditing()
+        onActiveFocusChanged: if (!activeFocus) root.finishEditing() // clicking away commits
+    }
+}

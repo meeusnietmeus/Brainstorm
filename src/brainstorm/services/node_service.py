@@ -3,7 +3,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal
 
 from brainstorm.db.nodes import NodeRepository
-from brainstorm.domain import Node, new_id, utc_now
+from brainstorm.domain import Node, new_id, title_from_body, utc_now
 
 DEFAULT_W = 200.0
 DEFAULT_H = 100.0
@@ -48,6 +48,8 @@ class NodeService(QObject):
     ) -> Node:
         if (x is None) != (y is None):
             raise ValueError("x and y must both be set or both be None")
+        if kind == "note" and not title:
+            title = title_from_body(body)
         now = utc_now()
         node = Node(
             id=new_id(),
@@ -73,11 +75,66 @@ class NodeService(QObject):
         unknown = set(fields) - _UPDATE_FIELDS
         if unknown:
             raise ValueError(f"Cannot update field(s): {', '.join(sorted(unknown))}")
-        self._require(node_id)
+        node = self._require(node_id)
+        if "body" in fields and "title" not in fields and node.kind == "note":
+            fields["title"] = title_from_body(fields["body"])
         self._repo.update(node_id, {**fields, "updated_at": utc_now()})
         node = self._require(node_id)
         self.nodeUpdated.emit(node)
         return node
+
+    def set_props(self, node_id: str, **changes: Any) -> Node:
+        """Merge `changes` into props. A value of None removes that key."""
+        node = self._require(node_id)
+        props = {**node.props, **changes}
+        props = {k: v for k, v in props.items() if v is not None}
+        return self.update(node_id, props=props)
+
+    def resize(
+        self,
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        props: dict[str, Any] | None = None,
+    ) -> Node:
+        """Commit a resize (which can also shift x/y) as one write. Called on release."""
+        node = self._require(node_id)
+        fields: dict[str, Any] = {"x": x, "y": y, "w": w, "h": h, "updated_at": utc_now()}
+        if props:
+            fields["props"] = {**node.props, **props}
+        self._repo.update(node_id, fields)
+        node = self._require(node_id)
+        self.nodeUpdated.emit(node)
+        return node
+
+    def shift_z(self, node_id: str, delta: int) -> list[Node]:
+        """Move a node up (+1) or down (-1) one step among the nodes drawn on the canvas.
+
+        The stacking order is renumbered 0..n-1 so z values never collide. Returns the nodes
+        whose z changed.
+        """
+        node = self._require(node_id)
+        if node.x is None:
+            return []
+        stack = [n for n in self._repo.list_for_space(node.space_id) if n.x is not None]
+        index = next(i for i, n in enumerate(stack) if n.id == node_id)
+        target = max(0, min(len(stack) - 1, index + delta))
+        if target == index:
+            return []
+        stack.insert(target, stack.pop(index))
+        changed = []
+        now = utc_now()
+        for z, item in enumerate(stack):
+            if item.z != z:
+                self._repo.update(item.id, {"z": z, "updated_at": now})
+                item.z = z
+                item.updated_at = now
+                changed.append(item)
+        for item in changed:
+            self.nodeUpdated.emit(item)
+        return changed
 
     def move(self, node_id: str, x: float | None, y: float | None) -> None:
         """Commit a position. Call once on drag release, never per mouse-move."""

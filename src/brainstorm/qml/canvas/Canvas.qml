@@ -10,6 +10,8 @@ FocusScope {
 
     property string spaceId: AppState.currentSpaceId
     property string selectedId: ""
+    property string editingId: "" // note being edited, if any
+    property Item selectedItem: null // NodeDelegate of the selected node
     property bool spaceHeld: false
     readonly property real zoom: world.scale
 
@@ -50,7 +52,18 @@ FocusScope {
     }
 
     function addNoteAt(worldPoint) {
-        select(CanvasController.createNoteCentered(worldPoint.x, worldPoint.y))
+        const id = CanvasController.createNoteCentered(worldPoint.x, worldPoint.y)
+        select(id)
+        editingId = id // new notes open straight into edit mode
+    }
+
+    // Where pasted content goes: under the cursor, or the viewport center if it is elsewhere.
+    function pasteAtCursor() {
+        const at = hover.hovered ? hover.point.position : Qt.point(width / 2, height / 2)
+        const w = screenToWorld(at)
+        const ids = CanvasController.paste(w.x, w.y)
+        if (ids.length > 0)
+            select(ids[0])
     }
 
     function addNoteAtCenter() {
@@ -92,6 +105,15 @@ FocusScope {
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Space && !event.isAutoRepeat) {
             spaceHeld = true
+            event.accepted = true
+        } else if (event.matches(StandardKey.Paste)) {
+            pasteAtCursor()
+            event.accepted = true
+        } else if (selectedId !== "" && event.key === Qt.Key_BracketRight) {
+            CanvasController.moveInZ(selectedId, 1)
+            event.accepted = true
+        } else if (selectedId !== "" && event.key === Qt.Key_BracketLeft) {
+            CanvasController.moveInZ(selectedId, -1)
             event.accepted = true
         }
     }
@@ -150,8 +172,27 @@ FocusScope {
         anchors.fill: parent
         enabled: !root.spaceHeld
         onPressed: root.forceActiveFocus()
-        onClicked: root.selectedId = ""
+        onClicked: {
+            root.selectedId = ""
+            root.editingId = ""
+        }
         onDoubleClicked: mouse => root.addNoteAt(root.screenToWorld(Qt.point(mouse.x, mouse.y)))
+    }
+
+    // Images dragged in from a browser arrive as a URL, local files as file URLs.
+    DropArea {
+        anchors.fill: parent
+        onDropped: drop => {
+            const at = root.screenToWorld(Qt.point(drop.x, drop.y))
+            const urls = []
+            if (drop.hasUrls)
+                for (const u of drop.urls)
+                    urls.push(u.toString())
+            const ids = CanvasController.importDrop(urls, drop.hasHtml ? drop.html : "",
+                                                    drop.hasText ? drop.text : "", at.x, at.y)
+            if (ids.length > 0)
+                root.select(ids[0])
+        }
     }
 
     Item {
@@ -193,7 +234,12 @@ FocusScope {
         onScaleChanged: delta => root.zoomAt(pinch.centroid.position, delta)
     }
     HoverHandler {
+        id: hover
         cursorShape: root.spaceHeld ? Qt.OpenHandCursor : Qt.ArrowCursor
+    }
+
+    NoteInspector {
+        canvas: root
     }
 
     // Hint for an empty board

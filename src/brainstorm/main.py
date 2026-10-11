@@ -8,11 +8,12 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from brainstorm import __version__, paths
 from brainstorm.app_state import AppState
 from brainstorm.controllers import CanvasController
+from brainstorm.db.assets import AssetRepository
 from brainstorm.db.connection import connect
 from brainstorm.db.migrations import migrate
 from brainstorm.db.nodes import NodeRepository
 from brainstorm.db.spaces import SpaceRepository
-from brainstorm.services import NodeService, SpaceService
+from brainstorm.services import AssetStore, ClipboardService, NodeService, SpaceService
 
 QML_URI = "Brainstorm"
 
@@ -39,14 +40,15 @@ def main() -> int:
 
     conn = connect(paths.db_path())
     migrate(conn)
-    paths.assets_dir()
     global_space = SpaceRepository(conn).ensure_global()
 
     # Services are the only write path. Kept referenced here so they outlive the engine.
     node_service = NodeService(NodeRepository(conn))
     space_service = SpaceService(SpaceRepository(conn))
     state = AppState(global_space.id)
-    canvas = CanvasController(node_service, space_service, state)
+    assets = AssetStore(AssetRepository(conn), paths.assets_dir())
+    clipboard = ClipboardService(node_service, assets)
+    canvas = CanvasController(node_service, space_service, state, clipboard, assets)
 
     engine = create_engine(state, canvas)
     if not engine.rootObjects():
