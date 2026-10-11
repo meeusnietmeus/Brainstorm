@@ -17,6 +17,9 @@ pip install -e ".[dev]"
 python -m brainstorm
 ```
 
+To launch it from the Start menu, run `scripts\install_start_menu_shortcut.ps1` once (add `-Remove`
+to delete the shortcut). It points at this checkout's venv, so re-run it if you move the folder.
+
 Data lives in the OS app-data folder (`brainstorm.db` plus `assets/`). Set `BRAINSTORM_DATA_DIR`
 to use a different folder, which is handy for experiments.
 
