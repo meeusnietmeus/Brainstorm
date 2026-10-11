@@ -1,0 +1,99 @@
+from typing import Any
+
+from PySide6.QtCore import QObject, Signal
+
+from brainstorm.db.nodes import NodeRepository
+from brainstorm.domain import Node, new_id, utc_now
+
+DEFAULT_W = 200.0
+DEFAULT_H = 100.0
+
+# Fields callers may change through update(). Kind changes go through promote() (Phase 5),
+# position through move().
+_UPDATE_FIELDS = {"title", "body", "status", "w", "h", "z", "props"}
+
+
+class NodeService(QObject):
+    """The only write path for nodes. Every mutation emits a signal that models listen to."""
+
+    nodeCreated = Signal(object)  # Node
+    nodeUpdated = Signal(object)  # Node (after the change)
+    nodeMoved = Signal(str, object, object)  # id, x, y (floats, or None when off canvas)
+    nodeDeleted = Signal(str, str)  # id, space_id
+
+    def __init__(self, repo: NodeRepository, parent: QObject | None = None):
+        super().__init__(parent)
+        self._repo = repo
+
+    def get(self, node_id: str) -> Node | None:
+        return self._repo.get(node_id)
+
+    def list(self, space_id: str) -> list[Node]:
+        return self._repo.list_for_space(space_id)
+
+    def create(
+        self,
+        space_id: str,
+        kind: str,
+        *,
+        title: str = "",
+        body: str = "",
+        status: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        w: float | None = DEFAULT_W,
+        h: float | None = DEFAULT_H,
+        z: int | None = None,
+        props: dict[str, Any] | None = None,
+    ) -> Node:
+        if (x is None) != (y is None):
+            raise ValueError("x and y must both be set or both be None")
+        now = utc_now()
+        node = Node(
+            id=new_id(),
+            space_id=space_id,
+            kind=kind,
+            title=title,
+            body=body,
+            status=status,
+            x=x,
+            y=y,
+            w=w,
+            h=h,
+            z=self._repo.max_z(space_id) + 1 if z is None else z,  # new nodes go on top
+            props=props or {},
+            created_at=now,
+            updated_at=now,
+        )
+        self._repo.add(node)
+        self.nodeCreated.emit(node)
+        return node
+
+    def update(self, node_id: str, **fields: Any) -> Node:
+        unknown = set(fields) - _UPDATE_FIELDS
+        if unknown:
+            raise ValueError(f"Cannot update field(s): {', '.join(sorted(unknown))}")
+        self._require(node_id)
+        self._repo.update(node_id, {**fields, "updated_at": utc_now()})
+        node = self._require(node_id)
+        self.nodeUpdated.emit(node)
+        return node
+
+    def move(self, node_id: str, x: float | None, y: float | None) -> None:
+        """Commit a position. Call once on drag release, never per mouse-move."""
+        if (x is None) != (y is None):
+            raise ValueError("x and y must both be set or both be None")
+        self._require(node_id)
+        self._repo.update(node_id, {"x": x, "y": y, "updated_at": utc_now()})
+        self.nodeMoved.emit(node_id, x, y)
+
+    def delete(self, node_id: str) -> None:
+        node = self._require(node_id)
+        self._repo.delete(node_id)
+        self.nodeDeleted.emit(node_id, node.space_id)
+
+    def _require(self, node_id: str) -> Node:
+        node = self._repo.get(node_id)
+        if node is None:
+            raise KeyError(f"No such node: {node_id}")
+        return node
