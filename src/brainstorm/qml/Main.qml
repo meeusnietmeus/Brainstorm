@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import QtCore
 import Brainstorm
 import "components"
+import "views"
 
 ApplicationWindow {
     id: window
@@ -98,15 +99,20 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            BoardView {
+                anchors.fill: parent
+                visible: AppState.currentView === "board"
+            }
+
             Text {
                 anchors.centerIn: parent
+                visible: AppState.currentView === "projects"
                 horizontalAlignment: Text.AlignHCenter
                 color: Theme.textMuted
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeTitle
-                text: AppState.currentView === "board"
-                    ? "Board\nThe canvas arrives in Phase 2."
-                    : "Projects\nNo projects yet."
+                text: "Projects
+No projects yet."
             }
         }
     }

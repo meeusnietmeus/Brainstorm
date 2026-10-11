@@ -1,11 +1,16 @@
+import json
 import sqlite3
+from typing import Any
 
 from brainstorm.domain import Space, new_id, utc_now
 from brainstorm.domain.space import GLOBAL
 
 
 def _from_row(row: sqlite3.Row) -> Space:
-    return Space(**dict(row))
+    data = dict(row)
+    if data["view_state"] is not None:
+        data["view_state"] = json.loads(data["view_state"])
+    return Space(**data)
 
 
 class SpaceRepository:
@@ -13,10 +18,11 @@ class SpaceRepository:
         self._conn = conn
 
     def add(self, space: Space) -> Space:
+        view_state = None if space.view_state is None else json.dumps(space.view_state)
         self._conn.execute(
-            "INSERT INTO spaces (id, kind, name, created_at, updated_at, archived_at)"
-            " VALUES (:id, :kind, :name, :created_at, :updated_at, :archived_at)",
-            {s: getattr(space, s) for s in space.__slots__},
+            "INSERT INTO spaces (id, kind, name, created_at, updated_at, archived_at, view_state)"
+            " VALUES (:id, :kind, :name, :created_at, :updated_at, :archived_at, :view_state)",
+            {**{s: getattr(space, s) for s in space.__slots__}, "view_state": view_state},
         )
         self._conn.commit()
         return space
@@ -41,6 +47,13 @@ class SpaceRepository:
             return existing
         now = utc_now()
         return self.add(Space(new_id(), GLOBAL, "Board", now, now))
+
+    def set_view_state(self, space_id: str, state: dict[str, Any] | None) -> bool:
+        """Deliberately leaves updated_at alone: panning is not an edit of the space."""
+        value = None if state is None else json.dumps(state)
+        cur = self._conn.execute("UPDATE spaces SET view_state = ? WHERE id = ?", (value, space_id))
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def delete(self, space_id: str) -> bool:
         cur = self._conn.execute("DELETE FROM spaces WHERE id = ?", (space_id,))

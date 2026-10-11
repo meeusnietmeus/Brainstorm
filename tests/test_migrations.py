@@ -40,7 +40,10 @@ def test_foreign_keys_are_enforced():
 def test_only_one_global_space_allowed():
     conn = connect(":memory:")
     migrate(conn)
-    insert = "INSERT INTO spaces VALUES (?, 'global', 'Board', 't', 't', NULL)"
+    insert = (
+        "INSERT INTO spaces (id, kind, name, created_at, updated_at)"
+        " VALUES (?, 'global', 'Board', 't', 't')"
+    )
     conn.execute(insert, ("a",))
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(insert, ("b",))

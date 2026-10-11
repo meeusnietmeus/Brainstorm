@@ -1,2 +1,3 @@
 singleton Theme 1.0 Theme.qml
+FlatButton 1.0 FlatButton.qml
 SidebarItem 1.0 SidebarItem.qml

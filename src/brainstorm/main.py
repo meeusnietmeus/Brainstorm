@@ -7,20 +7,22 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 from brainstorm import __version__, paths
 from brainstorm.app_state import AppState
+from brainstorm.controllers import CanvasController
 from brainstorm.db.connection import connect
 from brainstorm.db.migrations import migrate
 from brainstorm.db.nodes import NodeRepository
 from brainstorm.db.spaces import SpaceRepository
-from brainstorm.services import NodeService
+from brainstorm.services import NodeService, SpaceService
 
 QML_URI = "Brainstorm"
 
 
-def create_engine(state: AppState) -> QQmlApplicationEngine:
+def create_engine(state: AppState, canvas: CanvasController) -> QQmlApplicationEngine:
     """Expose Python objects to QML and load Main.qml."""
     # Must happen before the engine exists: registering afterwards breaks QtQuick type
     # resolution ("expected QObject" errors).
     qmlRegisterSingletonInstance(AppState, QML_URI, 1, 0, "AppState", state)
+    qmlRegisterSingletonInstance(CanvasController, QML_URI, 1, 0, "CanvasController", canvas)
     engine = QQmlApplicationEngine()
     qml = paths.qml_dir()
     engine.addImportPath(str(qml))
@@ -41,10 +43,12 @@ def main() -> int:
     global_space = SpaceRepository(conn).ensure_global()
 
     # Services are the only write path. Kept referenced here so they outlive the engine.
-    node_service = NodeService(NodeRepository(conn))  # noqa: F841
+    node_service = NodeService(NodeRepository(conn))
+    space_service = SpaceService(SpaceRepository(conn))
     state = AppState(global_space.id)
+    canvas = CanvasController(node_service, space_service, state)
 
-    engine = create_engine(state)
+    engine = create_engine(state, canvas)
     if not engine.rootObjects():
         return 1
 
