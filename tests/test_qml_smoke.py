@@ -324,3 +324,126 @@ def test_dropping_a_local_image_file_creates_an_image_node(env, png, tmp_path):
     QGuiApplication.sendEvent(window, drop)
     [image] = nodes.list(space.id)
     assert image.kind == "image"
+
+
+# Regressions and toolbar
+
+
+def test_clicking_outside_a_note_being_edited_saves_it(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.resetView()
+    window.requestActivate()
+    canvas.addNoteAtCenter()
+    for char in "kept":
+        QTest.keyClick(window, char)
+    empty_spot = canvas_point(window, canvas, 40, 40).toPoint()
+    QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, empty_spot)
+    QTest.qWait(20)
+    [note] = nodes.list(space.id)
+    assert note.body == "kept"
+    assert canvas.property("editingId") == ""
+
+
+def test_clicking_another_node_while_editing_saves_the_edit(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.resetView()
+    other = nodes.create(space.id, "note", body="other", x=300, y=200, w=200, h=60)
+    window.requestActivate()
+    canvas.addNoteAtCenter()
+    for char in "first":
+        QTest.keyClick(window, char)
+    s = world.property("scale")
+    spot = canvas_point(
+        window,
+        canvas,
+        world.property("x") + (other.x + 20) * s,
+        world.property("y") + (other.y + 20) * s,
+    ).toPoint()
+    QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, spot)
+    QTest.qWait(20)
+    bodies = {n.body for n in nodes.list(space.id)}
+    assert bodies == {"first", "other"}
+
+
+def pan_by(window, canvas, button, dx, dy):
+    start = canvas_point(window, canvas, 500, 300).toPoint()
+    QTest.mousePress(window, button, Qt.KeyboardModifier.NoModifier, start)
+    for step in range(1, 11):
+        QTest.mouseMove(window, start + QPoint(dx * step // 10, dy * step // 10))
+        QTest.qWait(5)
+    QTest.mouseRelease(window, button, Qt.KeyboardModifier.NoModifier, start + QPoint(dx, dy))
+
+
+def test_middle_mouse_pan_moves_the_view_by_the_drag_distance(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.resetView()
+    before = (world.property("x"), world.property("y"))
+    # Press far from the origin: the old bug snapped the view so its origin followed the cursor.
+    pan_by(window, canvas, Qt.MouseButton.MiddleButton, 80, 40)
+    assert world.property("x") == pytest.approx(before[0] + 80)
+    assert world.property("y") == pytest.approx(before[1] + 40)
+
+
+def test_space_left_drag_pans_without_jumping(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.resetView()
+    canvas.forceActiveFocus()
+    before = (world.property("x"), world.property("y"))
+    QTest.keyPress(window, Qt.Key.Key_Space)
+    pan_by(window, canvas, Qt.MouseButton.LeftButton, -60, 30)
+    QTest.keyRelease(window, Qt.Key.Key_Space)
+    assert world.property("x") == pytest.approx(before[0] - 60)
+    assert world.property("y") == pytest.approx(before[1] + 30)
+
+
+def find_button(window, text):
+    found = []
+
+    def walk(item):
+        if item.property("text") == text and item.property("checked") is not None:
+            found.append(item)
+        for child in item.childItems():
+            walk(child)
+
+    walk(window.contentItem())
+    [button] = found
+    return button
+
+
+def click_item(window, item):
+    center = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+    QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+    QTest.qWait(20)
+
+
+def test_toolbar_buttons_are_disabled_without_a_selection(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.select("")
+    QTest.qWait(20)
+    for label in ("Bring forward", "Send backward", "Delete"):
+        assert find_button(window, label).property("enabled") is False
+
+
+def test_toolbar_stacking_and_delete_buttons(env):
+    window, canvas, world, nodes, space, *_ = env
+    clear(nodes, space)
+    canvas.resetView()
+    first = nodes.create(space.id, "note", body="a", x=-400, y=-250, w=100, h=60)
+    second = nodes.create(space.id, "note", body="b", x=-380, y=-240, w=100, h=60)
+    canvas.select(first.id)
+    QTest.qWait(20)
+
+    click_item(window, find_button(window, "Bring forward"))
+    assert nodes.get(first.id).z > nodes.get(second.id).z
+    click_item(window, find_button(window, "Send backward"))
+    assert nodes.get(first.id).z < nodes.get(second.id).z
+
+    click_item(window, find_button(window, "Delete"))
+    assert nodes.get(first.id) is None
+    assert nodes.get(second.id) is not None
+    assert canvas.property("selectedId") == ""

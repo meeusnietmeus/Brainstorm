@@ -23,22 +23,31 @@ Item {
 
     signal editFinished(string text, real height)
 
+    // True from the start of an edit until it has been committed, so it commits exactly once
+    // however it ends: Escape, losing focus, or the canvas clearing `editing` on a click away.
+    property bool _open: false
+
     function finishEditing() {
-        if (editing)
-            editFinished(edit.text, naturalHeight)
+        if (!_open)
+            return
+        _open = false
+        editFinished(edit.text, Math.max(40, edit.contentHeight + 2 * padding))
     }
 
     function _startEditing() {
+        _open = true
         edit.text = body
         edit.forceActiveFocus()
         edit.cursorPosition = edit.length
     }
 
     onEditingChanged: {
-        if (editing)
+        if (editing) {
             _startEditing()
-        else
+        } else {
+            finishEditing()
             edit.focus = false // otherwise the hidden editor keeps swallowing key presses
+        }
     }
     Component.onCompleted: if (editing) _startEditing()
 

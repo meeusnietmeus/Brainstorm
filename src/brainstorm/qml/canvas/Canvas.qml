@@ -47,6 +47,8 @@ FocusScope {
     }
 
     function select(id) {
+        if (editingId !== "" && editingId !== id)
+            editingId = "" // leaving a note commits its edit
         selectedId = id
         forceActiveFocus()
     }
@@ -64,6 +66,19 @@ FocusScope {
         const ids = CanvasController.paste(w.x, w.y)
         if (ids.length > 0)
             select(ids[0])
+    }
+
+    function deleteSelected() {
+        if (selectedId === "")
+            return
+        editingId = ""
+        CanvasController.deleteNode(selectedId)
+        selectedId = ""
+    }
+
+    function moveSelectedInZ(delta) {
+        if (selectedId !== "")
+            CanvasController.moveInZ(selectedId, delta)
     }
 
     function addNoteAtCenter() {
@@ -110,10 +125,10 @@ FocusScope {
             pasteAtCursor()
             event.accepted = true
         } else if (selectedId !== "" && event.key === Qt.Key_BracketRight) {
-            CanvasController.moveInZ(selectedId, 1)
+            moveSelectedInZ(1)
             event.accepted = true
         } else if (selectedId !== "" && event.key === Qt.Key_BracketLeft) {
-            CanvasController.moveInZ(selectedId, -1)
+            moveSelectedInZ(-1)
             event.accepted = true
         }
     }
@@ -123,12 +138,7 @@ FocusScope {
             event.accepted = true
         }
     }
-    Keys.onDeletePressed: {
-        if (selectedId !== "") {
-            CanvasController.deleteNode(selectedId)
-            selectedId = ""
-        }
-    }
+    Keys.onDeletePressed: deleteSelected()
     onActiveFocusChanged: if (!activeFocus) spaceHeld = false
 
     // Debounced persistence of pan and zoom; flushed on quit.
@@ -219,14 +229,34 @@ FocusScope {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: event => root.zoomAt(wheel.point.position, Math.pow(1.0015, event.angleDelta.y))
     }
+    // Panning moves `world` by the drag's translation. (Using the handler's `target` would make
+    // the zero-sized world item jump so its origin sits under the cursor.)
     DragHandler {
+        id: middlePan
         acceptedButtons: Qt.MiddleButton
-        target: world
+        target: null
+        property point start
+        onActiveChanged: if (active) start = Qt.point(world.x, world.y)
+        onTranslationChanged: {
+            if (active) {
+                world.x = start.x + translation.x
+                world.y = start.y + translation.y
+            }
+        }
     }
     DragHandler {
+        id: spacePan
         acceptedButtons: Qt.LeftButton
         enabled: root.spaceHeld
-        target: world
+        target: null
+        property point start
+        onActiveChanged: if (active) start = Qt.point(world.x, world.y)
+        onTranslationChanged: {
+            if (active) {
+                world.x = start.x + translation.x
+                world.y = start.y + translation.y
+            }
+        }
     }
     PinchHandler {
         id: pinch

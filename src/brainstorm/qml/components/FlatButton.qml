@@ -6,6 +6,8 @@ Rectangle {
     property string text
     property bool checked: false
 
+    opacity: enabled ? 1 : 0.4
+
     signal clicked
 
     implicitWidth: label.implicitWidth + 2 * Theme.spacingLarge
@@ -29,6 +31,7 @@ Rectangle {
         id: mouse
         anchors.fill: parent
         hoverEnabled: true
+        enabled: root.enabled
         onClicked: root.clicked()
     }
 }

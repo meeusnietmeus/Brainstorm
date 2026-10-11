@@ -25,6 +25,26 @@ ColumnLayout {
                 text: "Add note"
                 onClicked: canvas.addNoteAtCenter()
             }
+            Rectangle {
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: 20
+                color: Theme.border
+            }
+            FlatButton {
+                text: "Bring forward"
+                enabled: canvas.selectedId !== ""
+                onClicked: canvas.moveSelectedInZ(1)
+            }
+            FlatButton {
+                text: "Send backward"
+                enabled: canvas.selectedId !== ""
+                onClicked: canvas.moveSelectedInZ(-1)
+            }
+            FlatButton {
+                text: "Delete"
+                enabled: canvas.selectedId !== ""
+                onClicked: canvas.deleteSelected()
+            }
             Item { Layout.fillWidth: true }
             Text {
                 text: Math.round(canvas.zoom * 100) + "%"
