@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Brainstorm
 import "../components"
 
@@ -12,6 +13,23 @@ FocusScope {
     property string selectedId: ""
     property string editingId: "" // note being edited, if any
     property Item selectedItem: null // NodeDelegate of the selected node
+    property string selectedEdgeId: ""
+    property Item selectedEdgeItem: null // EdgeItem of the selected edge
+    property string editingEdgeId: "" // edge whose label is being edited
+
+    // Live NodeDelegate items by node id. Arrows resolve their endpoints through this so they
+    // follow nodes during a drag, before anything is written to the database.
+    property var nodeItems: ({})
+
+    // Frame drag: ids of the nodes that move along, and how far they have moved so far.
+    property var carried: ({})
+    property point carryOffset: Qt.point(0, 0)
+
+    // Connection drag (from a dot on the selected node)
+    property bool connecting: false
+    property string connectSourceId: ""
+    property point connectFrom: Qt.point(0, 0) // world coordinates
+    property point connectTo: Qt.point(0, 0)
     property bool spaceHeld: false
     readonly property real zoom: world.scale
 
@@ -49,8 +67,87 @@ FocusScope {
     function select(id) {
         if (editingId !== "" && editingId !== id)
             editingId = "" // leaving a note commits its edit
+        editingEdgeId = ""
+        selectedEdgeId = ""
         selectedId = id
         forceActiveFocus()
+    }
+
+    function selectEdge(id) {
+        editingId = ""
+        selectedId = ""
+        selectedEdgeId = id
+        forceActiveFocus()
+    }
+
+    function registerNode(id, item) {
+        const items = Object.assign({}, nodeItems)
+        items[id] = item
+        nodeItems = items
+    }
+
+    function unregisterNode(id) {
+        const items = Object.assign({}, nodeItems)
+        delete items[id]
+        nodeItems = items
+    }
+
+    function beginCarry(ids) {
+        const map = {}
+        for (const id of ids)
+            map[id] = true
+        carryOffset = Qt.point(0, 0)
+        carried = map
+    }
+
+    function endCarry() {
+        carried = ({})
+        carryOffset = Qt.point(0, 0)
+    }
+
+    // Topmost node under a world point that can be the target of an arrow (not frames).
+    function nodeAt(p, excludeId) {
+        let best = null
+        for (const id in nodeItems) {
+            const item = nodeItems[id]
+            if (id === excludeId || !item.visible || item.isFrame)
+                continue
+            if (p.x >= item.x && p.x <= item.x + item.width
+                    && p.y >= item.y && p.y <= item.y + item.height
+                    && (best === null || item.z > best.z))
+                best = item
+        }
+        return best
+    }
+
+    function beginConnect(sourceId, fromPoint) {
+        connectSourceId = sourceId
+        connectFrom = fromPoint
+        connectTo = fromPoint
+        connecting = true
+    }
+
+    function updateConnect(p) {
+        connectTo = p
+    }
+
+    function finishConnect(p) {
+        if (!connecting)
+            return
+        connecting = false
+        const target = nodeAt(p, connectSourceId)
+        if (target !== null) {
+            const edgeId = CanvasController.createEdge(connectSourceId, target.nodeId)
+            if (edgeId !== "")
+                selectEdge(edgeId)
+        } else {
+            // Released on empty canvas: a new note there, already connected.
+            const id = CanvasController.createConnectedNote(connectSourceId, p.x, p.y)
+            if (id !== "") {
+                select(id)
+                editingId = id
+            }
+        }
     }
 
     function addNoteAt(worldPoint) {
@@ -69,11 +166,22 @@ FocusScope {
     }
 
     function deleteSelected() {
-        if (selectedId === "")
-            return
-        editingId = ""
-        CanvasController.deleteNode(selectedId)
-        selectedId = ""
+        if (selectedEdgeId !== "") {
+            editingEdgeId = ""
+            CanvasController.deleteEdge(selectedEdgeId)
+            selectedEdgeId = ""
+        } else if (selectedId !== "") {
+            editingId = ""
+            CanvasController.deleteNode(selectedId)
+            selectedId = ""
+        }
+    }
+
+    function addFrameAtCenter() {
+        const c = viewportCenterWorld()
+        const id = CanvasController.createFrameCentered(c.x, c.y)
+        select(id)
+        editingId = id // straight into naming it
     }
 
     function moveSelectedInZ(delta) {
@@ -184,7 +292,9 @@ FocusScope {
         onPressed: root.forceActiveFocus()
         onClicked: {
             root.selectedId = ""
+            root.selectedEdgeId = ""
             root.editingId = ""
+            root.editingEdgeId = ""
         }
         onDoubleClicked: mouse => root.addNoteAt(root.screenToWorld(Qt.point(mouse.x, mouse.y)))
     }
@@ -215,10 +325,41 @@ FocusScope {
         onYChanged: saveTimer.restart()
         onScaleChanged: saveTimer.restart()
 
+        // Arrows sit below the nodes but above the frames' band.
+        Item {
+            z: -1
+            Repeater {
+                model: CanvasController.edges
+                delegate: EdgeItem {
+                    canvas: root
+                }
+            }
+        }
+
         Repeater {
             model: CanvasController.nodes
             delegate: NodeDelegate {
                 canvas: root
+            }
+        }
+
+        // Rubber band while dragging an arrow out of a connection dot.
+        Shape {
+            visible: root.connecting
+            z: 1000000
+            antialiasing: true
+            ShapePath {
+                strokeColor: Theme.accent
+                strokeWidth: 2 / root.zoom
+                strokeStyle: ShapePath.DashLine
+                dashPattern: [4, 3]
+                fillColor: "transparent"
+                startX: root.connectFrom.x
+                startY: root.connectFrom.y
+                PathLine {
+                    x: root.connectTo.x
+                    y: root.connectTo.y
+                }
             }
         }
     }
@@ -269,6 +410,12 @@ FocusScope {
     }
 
     NoteInspector {
+        canvas: root
+    }
+    FrameInspector {
+        canvas: root
+    }
+    EdgeInspector {
         canvas: root
     }
 

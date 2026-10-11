@@ -2,10 +2,16 @@ from typing import Any
 
 from PySide6.QtCore import Property, QMimeData, QObject, QUrl, Slot
 
-from brainstorm import canvas_math
+from brainstorm import canvas_math, geometry
 from brainstorm.app_state import AppState
-from brainstorm.models import NodeModel
-from brainstorm.services import AssetStore, ClipboardService, NodeService, SpaceService
+from brainstorm.models import EdgeModel, NodeModel
+from brainstorm.services import (
+    AssetStore,
+    ClipboardService,
+    EdgeService,
+    NodeService,
+    SpaceService,
+)
 
 
 class CanvasController(QObject):
@@ -14,6 +20,7 @@ class CanvasController(QObject):
     def __init__(
         self,
         nodes: NodeService,
+        edges: EdgeService,
         spaces: SpaceService,
         state: AppState,
         clipboard: ClipboardService,
@@ -22,17 +29,28 @@ class CanvasController(QObject):
     ):
         super().__init__(parent)
         self._nodes = nodes
+        self._edges = edges
         self._spaces = spaces
         self._state = state
         self._clipboard = clipboard
         self._assets = assets
         self._model = NodeModel(nodes, state.currentSpaceId, self)
-        state.currentSpaceIdChanged.connect(lambda: self._model.set_space_id(state.currentSpaceId))
+        self._edge_model = EdgeModel(edges, nodes, state.currentSpaceId, self)
+        state.currentSpaceIdChanged.connect(self._on_space_changed)
+
+    def _on_space_changed(self) -> None:
+        self._model.set_space_id(self._state.currentSpaceId)
+        self._edge_model.set_space_id(self._state.currentSpaceId)
 
     def _get_model(self) -> QObject:
         return self._model
 
     nodes = Property(QObject, _get_model, constant=True)
+
+    def _get_edge_model(self) -> QObject:
+        return self._edge_model
+
+    edges = Property(QObject, _get_edge_model, constant=True)
 
     # Nodes
 
@@ -80,6 +98,99 @@ class CanvasController(QObject):
     @Slot(str, int)
     def moveInZ(self, node_id: str, delta: int) -> None:
         self._nodes.shift_z(node_id, delta)
+
+    @Slot(str, str)
+    def setTitle(self, node_id: str, title: str) -> None:
+        self._nodes.update(node_id, title=title)
+
+    # Frames
+
+    @Slot(float, float, result=str)
+    def createFrameCentered(self, cx: float, cy: float) -> str:
+        w, h = 420.0, 300.0
+        node = self._nodes.create(
+            self._state.currentSpaceId,
+            "frame",
+            title="Frame",
+            x=cx - w / 2,
+            y=cy - h / 2,
+            w=w,
+            h=h,
+            props={"tint": "#6ea8fe"},
+        )
+        return node.id
+
+    def _contents(self, frame_id: str):
+        frame = self._nodes.get(frame_id)
+        if frame is None:
+            return None, []
+        return frame, geometry.nodes_inside(frame, self._nodes.list(frame.space_id))
+
+    @Slot(str, result="QVariantList")
+    def nodesInsideFrame(self, frame_id: str) -> list[str]:
+        """Called at drag start so the canvas can move these along with the frame."""
+        return [n.id for n in self._contents(frame_id)[1]]
+
+    @Slot(str, float, float)
+    def moveFrame(self, frame_id: str, x: float, y: float) -> None:
+        """Commit a frame drag: the frame and everything that was inside it, in one write.
+
+        Nothing is written during the drag, so the stored rectangles are still the ones the
+        drag started from and the contents can be worked out again here.
+        """
+        frame, inside = self._contents(frame_id)
+        if frame is None:
+            return
+        dx, dy = x - frame.x, y - frame.y
+        moves = [(frame_id, x, y)] + [(n.id, n.x + dx, n.y + dy) for n in inside]
+        self._nodes.move_many(moves)
+
+    # Edges
+
+    @Slot(str, str, result=str)
+    def createEdge(self, source_id: str, target_id: str) -> str:
+        """Returns the new edge's id, or "" if the connection is not allowed (duplicate etc.)."""
+        try:
+            return self._edges.create(source_id, target_id).id
+        except (ValueError, KeyError):
+            return ""
+
+    @Slot(str, float, float, result=str)
+    def createConnectedNote(self, source_id: str, cx: float, cy: float) -> str:
+        """Release of a connection drag on empty canvas: a new note at that point, linked."""
+        source = self._nodes.get(source_id)
+        if source is None:
+            return ""
+        note = self._nodes.create(source.space_id, "note", x=cx - 130, y=cy - 20, w=260, h=40)
+        self._edges.create(source_id, note.id)
+        return note.id
+
+    @Slot(str, str)
+    def setEdgeLabel(self, edge_id: str, label: str) -> None:
+        self._edges.set_label(edge_id, label.strip())
+
+    @Slot(str, str, "QVariant")
+    def setEdgeStyle(self, edge_id: str, key: str, value: Any) -> None:
+        self._edges.set_style(edge_id, **{key: value})
+
+    @Slot(str)
+    def deleteEdge(self, edge_id: str) -> None:
+        self._edges.delete(edge_id)
+
+    @Slot(float, float, float, float, float, float, float, float, float, result="QVariantMap")
+    def edgeGeometry(
+        self,
+        sx: float,
+        sy: float,
+        sw: float,
+        sh: float,
+        dx: float,
+        dy: float,
+        dw: float,
+        dh: float,
+        head_size: float,
+    ) -> dict:
+        return geometry.edge_geometry((sx, sy, sw, sh), (dx, dy, dw, dh), head_size).as_dict()
 
     # Clipboard and drops
 

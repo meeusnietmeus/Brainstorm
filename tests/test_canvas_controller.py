@@ -7,10 +7,12 @@ from brainstorm.services import ClipboardService, SpaceService
 
 
 @pytest.fixture
-def controller(conn, node_service, asset_store, global_space):
+def controller(conn, node_service, edge_service, asset_store, global_space):
     spaces = SpaceService(SpaceRepository(conn))
     clipboard = ClipboardService(node_service, asset_store)
-    return CanvasController(node_service, spaces, AppState(global_space.id), clipboard, asset_store)
+    return CanvasController(
+        node_service, edge_service, spaces, AppState(global_space.id), clipboard, asset_store
+    )
 
 
 def test_new_note_is_empty_and_centered(controller, node_service, global_space):

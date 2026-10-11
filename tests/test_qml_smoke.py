@@ -13,11 +13,18 @@ from brainstorm.app_state import AppState
 from brainstorm.controllers import CanvasController
 from brainstorm.db.assets import AssetRepository
 from brainstorm.db.connection import connect
+from brainstorm.db.edges import EdgeRepository
 from brainstorm.db.migrations import migrate
 from brainstorm.db.nodes import NodeRepository
 from brainstorm.db.spaces import SpaceRepository
 from brainstorm.main import create_engine
-from brainstorm.services import AssetStore, ClipboardService, NodeService, SpaceService
+from brainstorm.services import (
+    AssetStore,
+    ClipboardService,
+    EdgeService,
+    NodeService,
+    SpaceService,
+)
 
 
 @pytest.fixture(scope="module")
@@ -35,19 +42,21 @@ def env(app, tmp_path_factory):
     conn = connect(":memory:")
     migrate(conn)
     space = SpaceRepository(conn).ensure_global()
-    nodes = NodeService(NodeRepository(conn))
+    node_repo = NodeRepository(conn)
+    nodes = NodeService(node_repo)
+    edges = EdgeService(EdgeRepository(conn), node_repo)
     spaces = SpaceService(SpaceRepository(conn))
     state = AppState(space.id)
     assets = AssetStore(AssetRepository(conn), tmp_path_factory.mktemp("assets"))
     clipboard = ClipboardService(nodes, assets)
-    controller = CanvasController(nodes, spaces, state, clipboard, assets)
+    controller = CanvasController(nodes, edges, spaces, state, clipboard, assets)
     engine = create_engine(state, controller)
     assert engine.rootObjects()
     window = engine.rootObjects()[0]
     QTest.qWait(100)  # let the layout run
     canvas = window.findChild(QObject, "boardCanvas")
     world = window.findChild(QObject, "world")
-    yield window, canvas, world, nodes, space, conn
+    yield window, canvas, world, nodes, space, conn, edges
     engine.deleteLater()
     conn.close()
 
@@ -144,7 +153,7 @@ def test_dragging_a_node_commits_one_move_on_release(env):
 
 
 def test_view_state_is_saved_after_debounce(env):
-    window, canvas, world, nodes, space, conn = env
+    window, canvas, world, nodes, space, conn, *_ = env
     canvas.zoomAt(QPointF(100, 100), 2.0)
     assert math.isclose(world.property("scale"), 2.0, rel_tol=1e-6)
     QTest.qWait(700)
@@ -425,7 +434,7 @@ def test_toolbar_buttons_are_disabled_without_a_selection(env):
     clear(nodes, space)
     canvas.select("")
     QTest.qWait(20)
-    for label in ("Bring forward", "Send backward", "Delete"):
+    for label in ("Forward", "Backward", "Delete"):
         assert find_button(window, label).property("enabled") is False
 
 
@@ -438,12 +447,272 @@ def test_toolbar_stacking_and_delete_buttons(env):
     canvas.select(first.id)
     QTest.qWait(20)
 
-    click_item(window, find_button(window, "Bring forward"))
+    click_item(window, find_button(window, "Forward"))
     assert nodes.get(first.id).z > nodes.get(second.id).z
-    click_item(window, find_button(window, "Send backward"))
+    click_item(window, find_button(window, "Backward"))
     assert nodes.get(first.id).z < nodes.get(second.id).z
 
     click_item(window, find_button(window, "Delete"))
     assert nodes.get(first.id) is None
     assert nodes.get(second.id) is not None
     assert canvas.property("selectedId") == ""
+
+
+# Phase 4: arrows and frames
+
+
+def scene_center(item):
+    return item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+
+
+def world_to_window(window, canvas, world, x, y):
+    s = world.property("scale")
+    return canvas_point(
+        window, canvas, world.property("x") + x * s, world.property("y") + y * s
+    ).toPoint()
+
+
+def drag(window, start, end, steps=12):
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    for step in range(1, steps + 1):
+        dx = (end.x() - start.x()) * step // steps
+        dy = (end.y() - start.y()) * step // steps
+        QTest.mouseMove(window, start + QPoint(dx, dy))
+        QTest.qWait(5)
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+    QTest.qWait(30)
+
+
+def right_dot(window):
+    dots = [d for d in find_items(window, "connectionDot") if d.property("visible")]
+    assert len(dots) == 4
+    return max(dots, key=lambda d: d.mapToScene(QPointF(0, 0)).x())
+
+
+def two_notes(nodes, space):
+    a = nodes.create(space.id, "note", body="A", x=-400, y=-100, w=200, h=44)
+    b = nodes.create(space.id, "note", body="B", x=100, y=-100, w=200, h=44)
+    return a, b
+
+
+def test_dragging_from_a_connection_dot_onto_a_node_creates_an_edge(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    canvas.select(a.id)
+    QTest.qWait(30)
+    start = scene_center(right_dot(window))
+    drag(window, start, world_to_window(window, canvas, world, b.x + 100, b.y + 22))
+    [edge] = edges.list(space.id)
+    assert (edge.source_id, edge.target_id) == (a.id, b.id)
+    assert canvas.property("selectedEdgeId") == edge.id
+    assert len(nodes.list(space.id)) == 2
+
+
+def test_dragging_from_a_dot_onto_empty_canvas_creates_a_connected_note(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, _ = two_notes(nodes, space)
+    canvas.select(a.id)
+    QTest.qWait(30)
+    start = scene_center(right_dot(window))
+    drag(window, start, world_to_window(window, canvas, world, -50, 200))
+    created = [n for n in nodes.list(space.id) if n.body == "" and n.id != a.id]
+    [new_note] = created
+    [edge] = edges.list(space.id)
+    assert (edge.source_id, edge.target_id) == (a.id, new_note.id)
+    assert canvas.property("editingId") == new_note.id  # ready to type into
+
+
+def test_arrow_follows_a_node_live_during_a_drag(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edges.create(a.id, b.id)
+    QTest.qWait(30)
+    [chip] = find_items(window, "edgeChip")
+    before = chip.mapToScene(QPointF(0, 0)).y()
+
+    grab = world_to_window(window, canvas, world, b.x + 100, b.y + 22)
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, grab)
+    for step in range(1, 11):
+        QTest.mouseMove(window, grab + QPoint(0, step * 20))
+        QTest.qWait(5)
+    during = chip.mapToScene(QPointF(0, 0)).y()
+    assert nodes.get(b.id).y == -100  # nothing written yet
+    QTest.mouseRelease(
+        window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, grab + QPoint(0, 200)
+    )
+    assert during > before + 50  # the midpoint chip moved with the node
+
+
+def test_double_clicking_the_chip_edits_the_label(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edge = edges.create(a.id, b.id)
+    QTest.qWait(30)
+    [chip] = find_items(window, "edgeChip")
+    window.requestActivate()
+    QTest.mouseDClick(
+        window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, scene_center(chip)
+    )
+    assert canvas.property("editingEdgeId") == edge.id
+    for char in "causes":
+        QTest.keyClick(window, char)
+    QTest.keyClick(window, Qt.Key.Key_Return)
+    QTest.qWait(30)
+    assert edges.get(edge.id).label == "causes"
+    assert canvas.property("editingEdgeId") == ""
+
+
+def test_clicking_away_commits_an_edge_label_and_escape_cancels(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edge = edges.create(a.id, b.id, "old")
+    QTest.qWait(30)
+    window.requestActivate()
+    canvas.selectEdge(edge.id)
+    canvas.setProperty("editingEdgeId", edge.id)
+    QTest.qWait(30)
+    QTest.keyClick(window, "X")
+    QTest.keyClick(window, Qt.Key.Key_Escape)
+    QTest.qWait(30)
+    assert edges.get(edge.id).label == "old"
+
+    canvas.setProperty("editingEdgeId", edge.id)
+    QTest.qWait(30)
+    QTest.keyClick(window, "Z")
+    QTest.mouseClick(
+        window,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        canvas_point(window, canvas, 40, 400).toPoint(),
+    )
+    QTest.qWait(30)
+    assert edges.get(edge.id).label.endswith("Z")
+
+
+def test_selecting_an_edge_and_pressing_delete_removes_only_the_edge(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edge = edges.create(a.id, b.id)
+    QTest.qWait(30)
+    [chip] = find_items(window, "edgeChip")
+    QTest.mouseClick(
+        window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, scene_center(chip)
+    )
+    assert canvas.property("selectedEdgeId") == edge.id
+    QTest.keyClick(window, Qt.Key.Key_Delete)
+    assert edges.get(edge.id) is None
+    assert len(nodes.list(space.id)) == 2
+
+
+def test_deleting_a_node_removes_its_arrow_from_the_canvas(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edges.create(a.id, b.id)
+    QTest.qWait(30)
+    assert len(find_items(window, "edgeItem")) == 1
+    nodes.delete(a.id)
+    QTest.qWait(30)
+    assert find_items(window, "edgeItem") == []
+    assert edges.list(space.id) == []
+
+
+def test_edges_follow_a_resized_node(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    a, b = two_notes(nodes, space)
+    edges.create(a.id, b.id)
+    QTest.qWait(30)
+    [chip] = find_items(window, "edgeChip")
+    before = chip.mapToScene(QPointF(0, 0)).x()
+    nodes.resize(a.id, -400, -100, 100, 44)  # a shrinks: its right side moves left
+    QTest.qWait(30)
+    assert chip.mapToScene(QPointF(0, 0)).x() < before
+
+
+def test_frame_is_added_titled_and_dragged_with_its_contents(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    window.requestActivate()
+    canvas.addFrameAtCenter()
+    [frame] = nodes.list(space.id)
+    assert frame.kind == "frame" and canvas.property("editingId") == frame.id
+    for char in "Boss":
+        QTest.keyClick(window, char)
+    QTest.keyClick(window, Qt.Key.Key_Return)
+    QTest.qWait(30)
+    assert nodes.get(frame.id).title == "Boss"
+
+    inside = nodes.create(space.id, "note", body="in", x=frame.x + 30, y=frame.y + 60, w=100, h=44)
+    outside = nodes.create(space.id, "note", body="out", x=frame.x + 600, y=frame.y, w=100, h=44)
+    QTest.qWait(30)
+    moves = []
+    nodes.nodeMoved.connect(lambda *args: moves.append(args))
+
+    header = world_to_window(window, canvas, world, frame.x + frame.w - 60, frame.y + 15)
+    drag(window, header, header + QPoint(120, 80))
+
+    assert len(moves) == 2  # the frame and the one node inside it
+    moved_frame, moved_inside = nodes.get(frame.id), nodes.get(inside.id)
+    assert moved_frame.x == pytest.approx(frame.x + 120, abs=2)
+    assert moved_inside.x - inside.x == pytest.approx(moved_frame.x - frame.x)
+    assert moved_inside.y - inside.y == pytest.approx(moved_frame.y - frame.y)
+    assert nodes.get(outside.id).x == outside.x
+
+
+def test_frame_body_is_click_through_so_double_click_adds_a_note_inside(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    frame = nodes.create(space.id, "frame", title="F", x=-200, y=-150, w=400, h=300)
+    QTest.qWait(30)
+    inside_point = world_to_window(window, canvas, world, 0, 50)
+    QTest.mouseDClick(
+        window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, inside_point
+    )
+    notes = [n for n in nodes.list(space.id) if n.kind == "note"]
+    assert len(notes) == 1
+    assert canvas.property("selectedId") != frame.id
+
+
+def test_frames_are_drawn_below_notes_and_tint_can_change(env):
+    window, canvas, world, nodes, space, conn, edges = env
+    clear(nodes, space)
+    canvas.resetView()
+    note = nodes.create(space.id, "note", body="n", x=0, y=0)
+    frame = nodes.create(
+        space.id, "frame", title="F", x=-100, y=-100, w=500, h=400, props={"tint": "#6ea8fe"}
+    )
+    canvas.select(frame.id)
+    QTest.qWait(30)
+    delegates = {}
+
+    def walk(item):
+        if item.property("nodeId"):
+            delegates[item.property("nodeId")] = item
+        for child in item.childItems():
+            walk(child)
+
+    walk(window.contentItem())
+    assert delegates[frame.id].property("z") < delegates[note.id].property("z")
+    swatches = [s for s in find_items(window, "tintSwatch") if s.property("visible")]
+    assert len(swatches) == 6
+    QTest.mouseClick(
+        window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, scene_center(swatches[1])
+    )
+    assert nodes.get(frame.id).props["tint"] == "#6fcf97"

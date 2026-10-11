@@ -25,24 +25,28 @@ ColumnLayout {
                 text: "Add note"
                 onClicked: canvas.addNoteAtCenter()
             }
+            FlatButton {
+                text: "Add frame"
+                onClicked: canvas.addFrameAtCenter()
+            }
             Rectangle {
                 Layout.preferredWidth: 1
                 Layout.preferredHeight: 20
                 color: Theme.border
             }
             FlatButton {
-                text: "Bring forward"
+                text: "Forward"
                 enabled: canvas.selectedId !== ""
                 onClicked: canvas.moveSelectedInZ(1)
             }
             FlatButton {
-                text: "Send backward"
+                text: "Backward"
                 enabled: canvas.selectedId !== ""
                 onClicked: canvas.moveSelectedInZ(-1)
             }
             FlatButton {
                 text: "Delete"
-                enabled: canvas.selectedId !== ""
+                enabled: canvas.selectedId !== "" || canvas.selectedEdgeId !== ""
                 onClicked: canvas.deleteSelected()
             }
             Item { Layout.fillWidth: true }

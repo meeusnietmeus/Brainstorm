@@ -118,7 +118,14 @@ class NodeService(QObject):
         node = self._require(node_id)
         if node.x is None:
             return []
-        stack = [n for n in self._repo.list_for_space(node.space_id) if n.x is not None]
+        # Frames are drawn in their own band below everything else, so only same-band nodes
+        # are compared: moving a note "up" past a frame would change nothing visible.
+        is_frame = node.kind == "frame"
+        stack = [
+            n
+            for n in self._repo.list_for_space(node.space_id)
+            if n.x is not None and (n.kind == "frame") == is_frame
+        ]
         index = next(i for i, n in enumerate(stack) if n.id == node_id)
         target = max(0, min(len(stack) - 1, index + delta))
         if target == index:
@@ -143,6 +150,14 @@ class NodeService(QObject):
         self._require(node_id)
         self._repo.update(node_id, {"x": x, "y": y, "updated_at": utc_now()})
         self.nodeMoved.emit(node_id, x, y)
+
+    def move_many(self, moves: list[tuple[str, float, float]]) -> None:
+        """Commit several positions as one write (dragging a selection or a frame)."""
+        for node_id, _, _ in moves:
+            self._require(node_id)
+        self._repo.move_many(moves, utc_now())
+        for node_id, x, y in moves:
+            self.nodeMoved.emit(node_id, x, y)
 
     def delete(self, node_id: str) -> None:
         node = self._require(node_id)
